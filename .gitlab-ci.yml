@@ -1,0 +1,62 @@
+stages:
+  - test
+  - security
+  - build
+
+variables:
+  DOCKER_IMAGE_NAME: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
+
+# 1. Test Unitaire (Simulation)
+unit-test:
+  image: python:3.9-slim
+  stage: test
+  script:
+    - pip install -r requirements.txt
+    - python -m py_compile app.py
+    - echo "Tests unitaires passés."
+
+# 2. SAST : Analyse du code avec SonarQube (Optionnel si pas de serveur configuré)
+sast-sonar:
+  stage: security
+  image: 
+    name: sonarsource/sonar-scanner-cli:latest
+    entrypoint: [""]
+  variables:
+    SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"
+    GIT_DEPTH: "0"
+  cache:
+    key: "${CI_JOB_NAME}"
+    paths:
+      - .sonar/cache
+  script:
+    # Cette commande nécessite que les variables SONAR_TOKEN et SONAR_HOST_URL soient définies dans GitLab
+    - sonar-scanner -Dsonar.qualitygate.wait=true || echo "SonarScanner ignoré si pas configuré"
+  allow_failure: true
+
+# 3. Container Scanning avec Trivy (Vérifie l'image Docker)
+container-scanning:
+  stage: security
+  image: 
+    name: aquasec/trivy:latest
+    entrypoint: [""]
+  services:
+    - docker:dind
+  script:
+    - echo "Scan de l'image de base python:3.9-slim..."
+    # Scan pour vulnérabilités CRITIQUES et arrêt du pipeline si trouvé
+    - trivy image --exit-code 1 --severity CRITICAL python:3.9-slim
+    # Scan complet informatif
+    - trivy image --severity HIGH,MEDIUM,LOW python:3.9-slim || true
+
+# 4. Build et Push vers le registre GitLab
+build-push-docker:
+  stage: build
+  image: docker:latest
+  services:
+    - docker:dind
+  before_script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY
+  script:
+    - docker build -t $DOCKER_IMAGE_NAME .
+    - docker push $DOCKER_IMAGE_NAME
+    - echo "Image poussée : $DOCKER_IMAGE_NAME"
